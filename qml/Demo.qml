@@ -29,22 +29,6 @@ Window {
                 }
             }
         }
-
-        Row {
-            spacing: 8
-            Switch {
-                id: activeSwitch
-                text: "Active"
-                checked: false
-                onCheckedChanged: captureItem.active = checked
-            }
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: captureItem.running ? "● live" : "○ idle"
-                color: captureItem.running ? "#4f4" : "#888"
-                font.pixelSize: 13
-            }
-        }
     }
 
     ExtCaptureItem {
@@ -60,21 +44,9 @@ Window {
         }
 
         appId: "firefox" // Default app_id to capture
-        active: activeSwitch.checked
+        active: true
 
         layer.enabled: true
         layer.smooth: true
-
-        // Dim when not running
-        opacity: running ? 1.0 : 0.3
-        Behavior on opacity { NumberAnimation { duration: 200 } }
-    }
-
-    Text {
-        anchors.centerIn: captureItem
-        visible: !captureItem.running
-        text: "Select an app_id and toggle Active"
-        color: "#666"
-        font.pixelSize: 18
     }
 }

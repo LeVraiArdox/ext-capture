@@ -123,6 +123,8 @@ private:
     int        m_drmFd    = -1;
     gbm_device* m_gbmDev  = nullptr;
 
+    int m_pendingIdx = -1;
+
     // Double-buffering: one buffer captured by compositor, one displayed by Qt.
     static constexpr int POOL = 2;
     std::array<std::unique_ptr<GbmBuffer>, POOL> m_buffers;

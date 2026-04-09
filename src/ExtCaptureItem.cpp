@@ -387,24 +387,25 @@ GbmBuffer* ExtCaptureItem::acquireCaptureBuffer()
     return nullptr;
 }
 
-void ExtCaptureItem::requestNextFrame()
-{
-    if (!m_session || !m_formatsReceived) return;
+void ExtCaptureItem::requestNextFrame() {
+    if (!m_session || m_frame || !m_formatsReceived) return;
 
-    GbmBuffer* buf = acquireCaptureBuffer();
-    if (!buf) {
-        // Both buffers in use, skip this frame.
-        qWarning() << "[ExtCapture] No free buffer – dropping frame request";
-        return;
+    int target = -1;
+    for (int i = 0; i < POOL; ++i) {
+        if (!m_buffers[i]->inUse && !m_buffers[i]->ready && !m_buffers[i]->isCapturing) {
+            target = i;
+            break;
+        }
     }
 
+    if (target == -1) return;
+
+    m_captureIdx = target;
+    m_buffers[target]->isCapturing = true;
+    
     m_frame = ext_image_copy_capture_session_v1_create_frame(m_session);
     ext_image_copy_capture_frame_v1_add_listener(m_frame, &s_frameListener, this);
-
-    ext_image_copy_capture_frame_v1_attach_buffer(m_frame, buf->waylandBuffer());
-
-    ext_image_copy_capture_frame_v1_damage_buffer(m_frame, 0, 0, buf->width(), buf->height());
-
+    ext_image_copy_capture_frame_v1_attach_buffer(m_frame, m_buffers[target]->waylandBuffer());
     ext_image_copy_capture_frame_v1_capture(m_frame);
     wl_display_flush(m_display);
 }
@@ -415,33 +416,22 @@ void ExtCaptureItem::onFrameDamage(void*, ext_image_copy_capture_frame_v1*, int3
 
 void ExtCaptureItem::onFramePresentationTime(void*, ext_image_copy_capture_frame_v1*, uint32_t, uint32_t, uint32_t) {}
 
-void ExtCaptureItem::onFrameReady(void* data, ext_image_copy_capture_frame_v1* frame)
-{
+void ExtCaptureItem::onFrameReady(void* data, ext_image_copy_capture_frame_v1* frame) {
     auto* self = static_cast<ExtCaptureItem*>(data);
+    int idx = self->m_captureIdx;
 
-    // Destroy the frame object, we don't need it anymore (poor thing)
     ext_image_copy_capture_frame_v1_destroy(frame);
     self->m_frame = nullptr;
 
-    GbmBuffer* readyBuf = self->m_buffers[self->m_captureIdx].get();
-    readyBuf->ready = true;
+    self->m_buffers[idx]->isCapturing = false;
+    self->m_buffers[idx]->ready = true;
 
-    // hand off to the Scene Graph thread via the pending pointer.
     {
         QMutexLocker lk(&self->m_sgMutex);
-        self->m_pendingBuffer = readyBuf;
+        self->m_pendingIdx = idx;
     }
 
-    if (!self->m_running) {
-        self->m_running = true;
-        emit self->runningChanged();
-    }
-
-    // Trigger a Scene Graph repaint on the GUI thread
     self->update();
-
-    // Pre-queue the next frame immediately (compositor will send it after vsync)
-    self->requestNextFrame();
 }
 
 void ExtCaptureItem::onFrameFailed(void* data, ext_image_copy_capture_frame_v1* frame, uint32_t reason)
@@ -457,92 +447,85 @@ void ExtCaptureItem::onFrameFailed(void* data, ext_image_copy_capture_frame_v1* 
 QSGNode* ExtCaptureItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
 {
     auto* node = static_cast<QSGSimpleTextureNode*>(oldNode);
+    int readyIdx = -1;
 
-    GbmBuffer* buf = nullptr;
     {
         QMutexLocker lk(&m_sgMutex);
-        buf = m_pendingBuffer;
+        readyIdx = m_pendingIdx;
         m_pendingBuffer = nullptr;
     }
 
-    if (!buf) {
-        return node;
-    }
-
-    if (m_displayIdx >= 0 && m_buffers[m_displayIdx]) {
+    if (m_displayIdx >= 0) {
         m_buffers[m_displayIdx]->inUse = false;
     }
-    m_displayIdx = m_captureIdx;
-    buf->inUse   = true;
 
-    // Resolve EGL extension function pointers once.
-    if (!m_eglCreateImage) {
-        // Get the EGLDisplay from the platform native interface
-        QPlatformNativeInterface* ni = qGuiApp->platformNativeInterface();
-        m_eglDisplay = static_cast<EGLDisplay>(ni->nativeResourceForIntegration(QByteArrayLiteral("egldisplay")));
-        if (m_eglDisplay == EGL_NO_DISPLAY)
-            m_eglDisplay = eglGetCurrentDisplay(); // fallback
-
-        m_eglCreateImage   = reinterpret_cast<void*>(eglGetProcAddress("eglCreateImageKHR"));
-        m_eglDestroyImage  = reinterpret_cast<void*>(eglGetProcAddress("eglDestroyImageKHR"));
-        m_glEGLImageTarget = reinterpret_cast<void*>(eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+    if (readyIdx != -1) {
+        m_displayIdx = readyIdx;
+        m_buffers[m_displayIdx]->ready = false;
+        m_buffers[m_displayIdx]->inUse = true;
     }
 
-    auto fnCreateImage   = reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(m_eglCreateImage);
-    auto fnDestroyImage  = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(m_eglDestroyImage);
-    auto fnEGLTarget     = reinterpret_cast<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>(m_glEGLImageTarget);
-
-    // Build the EGL attribute list for EGL_LINUX_DMA_BUF_EXT
-    EGLint attribs[] = {
-        EGL_WIDTH,                          buf->width(),
-        EGL_HEIGHT,                         buf->height(),
-        EGL_LINUX_DRM_FOURCC_EXT,           static_cast<EGLint>(buf->format()),
-        EGL_DMA_BUF_PLANE0_FD_EXT,          buf->fd(),
-        EGL_DMA_BUF_PLANE0_OFFSET_EXT,      0,
-        EGL_DMA_BUF_PLANE0_PITCH_EXT,       static_cast<EGLint>(buf->stride()),
-        EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, static_cast<EGLint>(buf->modifier() & 0xFFFFFFFF),
-        EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, static_cast<EGLint>(buf->modifier() >> 32),
-        EGL_NONE
-    };
-
-    EGLImage eglImg = fnCreateImage(m_eglDisplay,
-                                        EGL_NO_CONTEXT,
-                                        EGL_LINUX_DMA_BUF_EXT,
-                                        nullptr,
-                                        attribs);
-    if (eglImg == EGL_NO_IMAGE_KHR) {
-        qWarning() << "[ExtCapture] eglCreateImageKHR failed:" << eglGetError();
-        return node;
+    if (!m_frame && m_active) {
+        QMetaObject::invokeMethod(this, &ExtCaptureItem::requestNextFrame, Qt::QueuedConnection);
     }
 
-    // Create an OpenGL texture and bind the EGLImage to it
-    GLuint texId = 0;
-    glGenTextures(1, &texId);
-    glBindTexture(GL_TEXTURE_2D, texId);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    fnEGLTarget(GL_TEXTURE_2D, static_cast<GLeglImageOES>(eglImg));
-    glBindTexture(GL_TEXTURE_2D, 0);
+    if (m_displayIdx == -1) return node;
 
-    fnDestroyImage(m_eglDisplay, eglImg);
+    GbmBuffer* buf = m_buffers[m_displayIdx].get();
+    if (!buf->qtTexture()) {
+        if (!m_eglCreateImage) {
+            QPlatformNativeInterface* ni = qGuiApp->platformNativeInterface();
+            m_eglDisplay = static_cast<EGLDisplay>(ni->nativeResourceForIntegration(QByteArrayLiteral("egldisplay")));
+            if (m_eglDisplay == EGL_NO_DISPLAY) m_eglDisplay = eglGetCurrentDisplay();
 
-    QSGTexture* sgTex = QNativeInterface::QSGOpenGLTexture::fromNative(
-        texId,
-        window(),
-        QSize(buf->width(), buf->height()),
-        QQuickWindow::TextureHasAlphaChannel);
+            m_eglCreateImage   = reinterpret_cast<void*>(eglGetProcAddress("eglCreateImageKHR"));
+            m_eglDestroyImage  = reinterpret_cast<void*>(eglGetProcAddress("eglDestroyImageKHR"));
+            m_glEGLImageTarget = reinterpret_cast<void*>(eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+        }
 
-    if (!node) {
-        node = new QSGSimpleTextureNode;
-        node->setFiltering(QSGTexture::Linear);
+        auto fnCreateImage  = reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(m_eglCreateImage);
+        auto fnEGLTarget    = reinterpret_cast<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>(m_glEGLImageTarget);
+
+        EGLint attribs[] = {
+            EGL_WIDTH,                          buf->width(),
+            EGL_HEIGHT,                         buf->height(),
+            EGL_LINUX_DRM_FOURCC_EXT,           static_cast<EGLint>(buf->format()),
+            EGL_DMA_BUF_PLANE0_FD_EXT,          buf->fd(),
+            EGL_DMA_BUF_PLANE0_OFFSET_EXT,      0,
+            EGL_DMA_BUF_PLANE0_PITCH_EXT,       static_cast<EGLint>(buf->stride()),
+            EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, static_cast<EGLint>(buf->modifier() & 0xFFFFFFFF),
+            EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, static_cast<EGLint>(buf->modifier() >> 32),
+            EGL_NONE
+        };
+
+        buf->eglImage = fnCreateImage(m_eglDisplay, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
+        
+        if (buf->eglImage == EGL_NO_IMAGE_KHR) {
+            qWarning() << "[ExtCapture] eglCreateImageKHR failed:" << eglGetError();
+            return node;
+        }
+
+        GLuint texId = 0;
+        glGenTextures(1, &texId);
+        glBindTexture(GL_TEXTURE_2D, texId);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        fnEGLTarget(GL_TEXTURE_2D, static_cast<GLeglImageOES>(buf->eglImage));
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        // On crée la texture Qt qui "enveloppe" notre texture native
+        // On ne la détruira que lors de la destruction du GbmBuffer
+        QSGTexture* sgTex = QNativeInterface::QSGOpenGLTexture::fromNative(
+            texId,
+            window(),
+            QSize(buf->width(), buf->height()),
+            QQuickWindow::TextureHasAlphaChannel);
+        
+        buf->setQtTexture(sgTex);
     }
 
-    QSGTexture* old = node->texture();
-    node->setTexture(sgTex);
-    delete old;
-
+    if (!node) node = new QSGSimpleTextureNode;
+    node->setTexture(buf->qtTexture());
     node->setRect(boundingRect());
     return node;
 }
