@@ -5,6 +5,9 @@ using only **standard Wayland staging protocols**. No Hyprland dependency.
 
 I did this because Quickshell's `ScreencopyView` uses hyprland protocols and I wanted a more portable solution. This demo supports Hyprland tho.
 
+> [!IMPORTANT]
+> This is a side project, don't expect it to be stable
+
 ## Protocols used
 
 | Protocol | Role |
