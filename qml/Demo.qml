@@ -21,7 +21,7 @@ Window {
         Row {
             spacing: 6
             Repeater {
-                model: ["firefox", "foot", "kitty", "code", "org.kde.dolphin"]
+                model: captureItem.availableAppIds
                 delegate: Button {
                     text: modelData
                     highlighted: modelData === captureItem.appId

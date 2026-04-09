@@ -51,12 +51,15 @@ class ExtCaptureItem : public QQuickItem
     Q_PROPERTY(bool    active  READ active  WRITE setActive NOTIFY activeChanged)
     // Read-only: true once the session is live and frames are flowing.
     Q_PROPERTY(bool    running READ running NOTIFY runningChanged)
+    // Read-only list of available app_ids (toplevels) to capture, updated when the session is active.
+    Q_PROPERTY(QStringList availableAppIds READ availableAppIds NOTIFY availableAppIdsChanged)
 
 public:
     explicit ExtCaptureItem(QQuickItem* parent = nullptr);
     ~ExtCaptureItem() override;
 
     QString appId()  const { return m_appId; }
+    QStringList availableAppIds() const;
     bool    active() const { return m_active; }
     bool    running() const { return m_running; }
 
@@ -70,6 +73,7 @@ protected:
 
 signals:
     void appIdChanged();
+    void availableAppIdsChanged();
     void activeChanged();
     void runningChanged();
 

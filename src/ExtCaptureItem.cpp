@@ -97,10 +97,31 @@ void ExtCaptureItem::setAppId(const QString& id)
     m_appId = id;
     emit appIdChanged();
 
-    if (m_waylandReady && m_active) {
+    if (m_waylandReady) {
         stopCapture();
-        tryStartCapture();
+        m_targetHandle = nullptr;
+
+        for (const auto& t : m_pendingToplevels) {
+            if (t.appId == m_appId) {
+                m_targetHandle = t.handle;
+                break;
+            }
+        }
+
+        if (m_active && m_targetHandle) {
+            tryStartCapture();
+        }
     }
+}
+
+QStringList ExtCaptureItem::availableAppIds() const
+{
+    QStringList list;
+    for (const auto& t : m_pendingToplevels) {
+        if (!t.appId.isEmpty() && !list.contains(t.appId))
+            list << t.appId;
+    }
+    return list;
 }
 
 void ExtCaptureItem::setActive(bool active)
@@ -208,6 +229,7 @@ void ExtCaptureItem::onToplevelDone(void* data, ext_foreign_toplevel_handle_v1* 
                 if (self->m_active && self->m_waylandReady)
                     self->tryStartCapture();
             }
+            emit self->availableAppIdsChanged();
             return;
         }
     }
@@ -226,6 +248,7 @@ void ExtCaptureItem::onToplevelClosed(void* data, ext_foreign_toplevel_handle_v1
             self->m_pendingToplevels.removeAt(i);
         }
     }
+    emit self->availableAppIdsChanged();
 }
 
 void ExtCaptureItem::tryStartCapture()
