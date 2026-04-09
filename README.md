@@ -1,4 +1,4 @@
-# ExtCapture – `ext-image-copy-capture-v1` QML component
+# ExtCapture QML component
 
 Capture a Wayland foreign toplevel (by `app_id`) into a `QQuickItem`
 using only **standard Wayland staging protocols**. No Hyprland dependency.
