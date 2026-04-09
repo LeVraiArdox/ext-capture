@@ -21,11 +21,13 @@ Window {
         Row {
             spacing: 6
             Repeater {
-                model: captureItem.availableAppIds
+                model: captureItem.windows 
                 delegate: Button {
-                    text: modelData
-                    highlighted: modelData === captureItem.appId
-                    onClicked: captureItem.appId = modelData
+                    text: modelData.title 
+                    highlighted: modelData.id === captureItem.windowId
+                    onClicked: {
+                        captureItem.windowId = modelData.id
+                    }
                 }
             }
         }
@@ -43,7 +45,7 @@ Window {
             margins: 16
         }
 
-        appId: "firefox" // Default app_id to capture
+        windowId: "" // Start with no window selected
         active: true
 
         layer.enabled: true

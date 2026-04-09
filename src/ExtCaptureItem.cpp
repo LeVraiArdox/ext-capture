@@ -91,39 +91,6 @@ void ExtCaptureItem::componentComplete()
     if (m_active) tryStartCapture();
 }
 
-void ExtCaptureItem::setAppId(const QString& id)
-{
-    if (m_appId == id) return;
-    m_appId = id;
-    emit appIdChanged();
-
-    if (m_waylandReady) {
-        stopCapture();
-        m_targetHandle = nullptr;
-
-        for (const auto& t : m_pendingToplevels) {
-            if (t.appId == m_appId) {
-                m_targetHandle = t.handle;
-                break;
-            }
-        }
-
-        if (m_active && m_targetHandle) {
-            tryStartCapture();
-        }
-    }
-}
-
-QStringList ExtCaptureItem::availableAppIds() const
-{
-    QStringList list;
-    for (const auto& t : m_pendingToplevels) {
-        if (!t.appId.isEmpty() && !list.contains(t.appId))
-            list << t.appId;
-    }
-    return list;
-}
-
 void ExtCaptureItem::setActive(bool active)
 {
     if (m_active == active) return;
@@ -215,21 +182,62 @@ void ExtCaptureItem::onToplevelAppId(void* data, ext_foreign_toplevel_handle_v1*
     }
 }
 
-void ExtCaptureItem::onToplevelTitle(void*, ext_foreign_toplevel_handle_v1*, const char*) {}
-void ExtCaptureItem::onToplevelIdentifier(void*, ext_foreign_toplevel_handle_v1*, const char*) {}
+void ExtCaptureItem::onToplevelTitle(void* data, ext_foreign_toplevel_handle_v1* handle, const char* title)
+{
+    auto* self = static_cast<ExtCaptureItem*>(data);
+    for (auto& t : self->m_pendingToplevels) {
+        if (t.handle == handle) {
+            t.title = QString::fromUtf8(title);
+            emit self->windowsChanged();
+            return;
+        }
+    }
+}
+
+void ExtCaptureItem::onToplevelIdentifier(void* data, ext_foreign_toplevel_handle_v1* handle, const char* identifier)
+{
+    auto* self = static_cast<ExtCaptureItem*>(data);
+    for (auto& t : self->m_pendingToplevels) {
+        if (t.handle == handle) {
+            t.identifier = QString::fromUtf8(identifier);
+            emit self->windowsChanged();
+            return;
+        }
+    }
+}
+
+void ExtCaptureItem::setWindowId(const QString& id)
+{
+    if (m_windowId == id) return;
+    m_windowId = id;
+    emit windowIdChanged();
+
+    if (m_waylandReady) {
+        stopCapture();
+        m_targetHandle = nullptr;
+
+        for (const auto& t : m_pendingToplevels) {
+            if (t.identifier == m_windowId) {
+                m_targetHandle = t.handle;
+                break;
+            }
+        }
+
+        if (m_active && m_targetHandle) tryStartCapture();
+    }
+}
 
 void ExtCaptureItem::onToplevelDone(void* data, ext_foreign_toplevel_handle_v1* handle)
 {
     auto* self = static_cast<ExtCaptureItem*>(data);
     for (auto& t : self->m_pendingToplevels) {
         if (t.handle == handle && !t.matched) {
-            if (!self->m_appId.isEmpty() && t.appId == self->m_appId) {
+            if (!self->m_windowId.isEmpty() && t.identifier == self->m_windowId) {
                 t.matched = true;
                 self->m_targetHandle = handle;
                 if (self->m_active && self->m_waylandReady)
                     self->tryStartCapture();
             }
-            emit self->availableAppIdsChanged();
             return;
         }
     }
@@ -248,7 +256,6 @@ void ExtCaptureItem::onToplevelClosed(void* data, ext_foreign_toplevel_handle_v1
             self->m_pendingToplevels.removeAt(i);
         }
     }
-    emit self->availableAppIdsChanged();
 }
 
 void ExtCaptureItem::tryStartCapture()
@@ -551,4 +558,18 @@ QSGNode* ExtCaptureItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData*)
     node->setTexture(buf->qtTexture());
     node->setRect(boundingRect());
     return node;
+}
+
+QVariantList ExtCaptureItem::windows() const
+{
+    QVariantList list;
+    for (const auto& t : m_pendingToplevels) {
+        if (t.identifier.isEmpty()) continue;
+        QVariantMap map;
+        map["id"] = t.identifier;
+        map["appId"] = t.appId;
+        map["title"] = t.title.isEmpty() ? t.appId : t.title;
+        list << map;
+    }
+    return list;
 }

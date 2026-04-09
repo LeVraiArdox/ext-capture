@@ -45,20 +45,22 @@ class ExtCaptureItem : public QQuickItem
     Q_OBJECT
     QML_ELEMENT
 
-    // The app_id of the toplevel window to capture (e.g. "firefox", "foot").
-    Q_PROPERTY(QString appId   READ appId   WRITE setAppId  NOTIFY appIdChanged)
+    // The identifier of the window to capture, typically in the form "appId:instanceId". Updated when the session is active.
+    Q_PROPERTY(QString windowId READ windowId WRITE setWindowId NOTIFY windowIdChanged)
+    // App title 
+    Q_PROPERTY(QVariantList windows READ windows NOTIFY windowsChanged)
     // Set to true to start capturing.
     Q_PROPERTY(bool    active  READ active  WRITE setActive NOTIFY activeChanged)
     // Read-only: true once the session is live and frames are flowing.
     Q_PROPERTY(bool    running READ running NOTIFY runningChanged)
-    // Read-only list of available app_ids (toplevels) to capture, updated when the session is active.
-    Q_PROPERTY(QStringList availableAppIds READ availableAppIds NOTIFY availableAppIdsChanged)
 
 public:
     explicit ExtCaptureItem(QQuickItem* parent = nullptr);
     ~ExtCaptureItem() override;
 
-    QString appId()  const { return m_appId; }
+    QString windowId() const { return m_windowId; }
+    void setWindowId(const QString& id);
+    QVariantList windows() const;
     QStringList availableAppIds() const;
     bool    active() const { return m_active; }
     bool    running() const { return m_running; }
@@ -72,8 +74,8 @@ protected:
     void componentComplete() override;
 
 signals:
-    void appIdChanged();
-    void availableAppIdsChanged();
+    void windowIdChanged();
+    void windowsChanged();
     void activeChanged();
     void runningChanged();
 
@@ -89,7 +91,7 @@ private:
     // Returns the buffer that is not currently in use by Qt.
     GbmBuffer* acquireCaptureBuffer();
 
-    QString m_appId;
+    QString m_windowId;
     bool    m_active  = false;
     bool    m_running = false;
     bool    m_waylandReady = false;
@@ -120,6 +122,8 @@ private:
     struct ToplevelInfo {
         ext_foreign_toplevel_handle_v1* handle = nullptr;
         QString appId;
+        QString title;
+        QString identifier;
         bool matched = false;
     };
     QList<ToplevelInfo> m_pendingToplevels;
